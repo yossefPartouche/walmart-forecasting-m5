@@ -1,6 +1,10 @@
-<div style="background-color: #e6f0fa; border-radius: 12px; padding: 20px; border: 1px solid #b3d1ff; margin-bottom: 20px;">
-  <h1 style="margin: 0; color: #004d99; border-bottom: none;">🔆 M5 Walmart Hierarchical Forecasting</h1>
-</div>
+<table width="100%">
+  <tr style="background-color: #e6f0fa;">
+    <td style="padding: 24px; border: 1px solid #b3d1ff; border-radius: 12px;">
+      <h1 align="center" style="margin: 0; color: #004d99; border-bottom: none;">🔆 M5 Walmart Hierarchical Forecasting</h1>
+    </td>
+  </tr>
+</table>
 
 This repository contains the evolution, feature engineering, and modeling pipeline for the M5 Walmart Forecasting Challenge. Our final recursive forecasting approach achieved an **RMSE score of 4733**, driven by dynamic lag updates, robust YoY growth scaling, and deep calendar context.
 
