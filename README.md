@@ -1,163 +1,157 @@
-## Why the Baseline Underperformed
+# 🔆 M5 Walmart Hierarchical Forecasting
 
-The baseline model produced poor forecasting results primarily due to a fundamental flaw in its inference logic, coupled with a severe lack of descriptive features and suboptimal model configuration. 
-
-Here is a breakdown of the core issues:
-
-* **Train/Inference Mismatch (The Biggest Flaw):** The model was trained on real, dynamic lag values but was fed a static "recent average" for future lags during inference. This massive distribution shift meant the model was making predictions based on data it didn't understand.
-    * *Example:* When predicting sales for Day 8, the baseline used a flat historical average for `lag_7` instead of dynamically using the model's actual prediction for Day 1. 
-* **Feature Poverty:** The baseline lacked the necessary historical and temporal context to capture real-world retail behavior.
-    * *Missing Trends & Volatility:* It completely omitted rolling statistics (means, maxes, standard deviations), which are essential for understanding if a product's sales are currently trending up or wildly fluctuating.
-    * *Shallow Seasonality:* It only looked at 7-day and 28-day lags, missing critical deeper signals like 4-week same-day averages (e.g., averaging the last 4 Mondays).
-    * *Naive Event Handling:* It only flagged if an event was happening *today*. It completely missed pre-event shopping surges (`event_tomorrow`) and post-event drop-offs (`event_yesterday`).
-    * *Ignored Calendar Effects:* It failed to account for realistic retail cycles, such as the month-end paycheck effect.
-* **Suboptimal Tuning and Validation:** * *Weak Configuration:* The LightGBM setup was undertrained (only 1,000 trees) and lacked proper regularization to prevent overfitting.
-    * *Unreliable Evaluation:* Validating on a short 30-day window produced noisy, unstable RMSE scores that didn't accurately reflect how the model would perform over the actual competition period.
-
-
-### Remarks on the training data, 
-* The all stores entry is likely affecting the results as it's extremely high in revenue compared to the rest, though it's useful for general pattern recognition across all stores so maybe should be dealt with seperately.
-* Weekend Surge, people spend more over the weekend and this is noticable in the data ($286,000) compared to ($206,000)
-* Certain events lead to outlier spikes and certain events lead outlier trofts (christmass vs Eid al-Fitr) either buy a lot before or the store closing earlier. 
-
-M5 Walmart Forecasting — Model v2
-Key findings from deep EDA driving this version:
-
-M5 Walmart Forecasting — Model v3
-Key findings from deep EDA driving this version:
- 
-# Model Version Comparison: Version 2 vs. Version 3
-
-Below is a concise summary of the engineering differences and performance shifts between the two model versions.
-
-## 1. Performance Summary
-* **Version 2 Validation RMSE:** `2533.28` (Stopped early around ~400 iterations at a `0.02` learning rate).
-* **Version 3 Validation RMSE:** `2491.53` (Converged methodically at iteration `1340` using a lower `0.01` learning rate).
+This repository contains the evolution, feature engineering, and modeling pipeline for the M5 Walmart Forecasting Challenge. Our final recursive forecasting approach achieved an **RMSE score of 4733**, driven by dynamic lag updates, robust YoY growth scaling, and deep calendar context.
 
 ---
 
-## 2. Structural & Architectural Upgrades
+## The Winning Strategy (Score: 4733)
 
-### Trend & Long-Term Modeling
-* **Version 2:** Relied on a basic global linear trend column (`days_since_start`) across all stores uniformly. 
-* **Version 3:** Introduced **Store-Level Year-over-Year (YoY) Growth Ratios** computed over clean historical windows (Jan–Sep 2014 vs. Jan–Sep 2015). This allowed the model to scale long-term annual lags natively based on individual store trajectories (e.g., handles the fact that Store 10 had zero trend while others grew rapidly).
+Our best-performing pipeline relies on a heavily engineered recursive LightGBM model.
 
-### Advanced Feature Engineering
-* **Cyclical Encoding:** Version 3 introduced Sine and Cosine transformations for time fields (`dow_sin`, `dow_cos`, `month_sin`, etc.). This removed abrupt boundary discontinuities (such as the jump between December and January, or Sunday and Monday) which confused trees in Version 2.
-* **Momentum Ratios:** Added scale-independent metrics (`momentum_7_28`, `momentum_7_56`, `momentum_28_365`) to capture growth velocity and acceleration instead of relying purely on absolute raw volumes.
-* **Deeper Lags:** Integrated annual look-backs (`lag_364`, `lag_365`, `lag_371`, `lag_728`) to explicitly hook into multi-year matching days of the week.
-
-### Enhanced Calendar Context
-* **Granular Event Lifting:** Expanded the calendar profile by hard-coding precise event weights derived from exploratory data analysis (EDA).
-* **High-Impact Spike Capture:** Automatically injected a localized `PreIndependenceDay` holiday on July 3rd across all years after data diagnostics showed a consistent unmapped +50% sales surge.
-
-### Pipeline Robustness & Post-Processing
-* **Bug-Free Shifting:** Replaced the index-based index grouping transforms in Version 2 (which caused `KeyError` failures on large dataframes) with a clean, optimized temporary binary flag buffer and a native `.shift()` loop.
-* **Bottom-Up Hierarchy Reconciliation:** Version 3 safely bypasses the scale-distorting "All Stores" aggregate (`store_id: 0`) during training, but automatically computes its daily values at submission time by grouping and summing the individual child forecasts.
-* **Hard Business Overrides:** Implemented absolute limits for predictable closures (such as forcing Christmas Day revenue to zero), preventing the tree estimators from assigning float noise to closed dates.
-
-# Summary of How We Reached Score 4733
-
-**Key Files**
+### Key Files
 
 | File | Purpose |
-|------|---------|
-|```eda_generation/phase2_build_dataset.py``` | Builds the master feature dataset |
-|```eda_generation/master_dataset_phase2.csv``` | The enriched dataset (input to Prophet) |
-|```models/aggregate_forecast.py``` | Aggregate-level Prophet forecast (not used in final) |
-| ```models/forecast_2.py``` | The model that produced RMSE 4733 |
-| `predictions/submission_2.csv` | The Best submission | 
+| --- | --- |
+| `eda_generation/phase2_build_dataset.py` | Builds the master feature dataset. |
+| `eda_generation/master_dataset_phase2.csv` | The enriched dataset (input to Prophet/LightGBM). |
+| `models/aggregate_forecast.py` | Aggregate-level Prophet forecast (experimental, not used in final). |
+| `models/forecast_2.py` | **The final model that produced RMSE 4733.** |
+| `predictions/submission_2.csv` | The best submission file. |
 
-### What made ``forecast_2.py`` Work
+### What Made `forecast_2.py` Work
 
-**Feature Engineering:**
+#### 1. Feature Engineering
 
-1. Lag features: `lag_1, 2, 3, 6, 7, 14, 21, 28, 35, 42, 56, 364, 371`
-2. `lag_364` same day last year, `lag_371` same weekday year
-3. YoY scaling: `lag_364_scaled` = `lag_364` × `store_yoy_monthly`, same for `lag_371`
-4. Pet-store and `pet-store`x`month` YoY ratios (2015 vs 2014)
-5. Rolling stats: `rmean`, `rstd`, `rmax`, `rmin` for windows 7, 14, 28, 56 (anchored at lag-7)
-6. Same-DOW averages: `lag7_mean_4w`, `lag7_mean_8w`
-7. Momentum: `lag_7` / `lag_28`
-8. Calendar: `dow`, `day_of_month`, `month`, `year`, `week_of_year`, `quarter`, `is_weekend`, `days_since_start`
-9. Event features: `event_negative`, `event_positive`, `days_from_event`, lead/lag event windows
-10. Cross-store features: correlated store pairs as exogenous signals
-11. Categorical: `store_id`, `event`, `store_weekend`, `store_dow`
+* **Lag Features:** `lag_1`, `2`, `3`, `6`, `7`, `14`, `21`, `28`, `35`, `42`, `56`, `364`, `371`.
+* **Annual Mapping:** `lag_364` (same day last year) and `lag_371` (same weekday last year).
+* **YoY Scaling:** `lag_364_scaled = lag_364 × store_yoy_monthly` (similarly applied to `lag_371`) to explicitly account for store-level growth.
+* **Pet-Store Ratios:** Pet-store and `pet-store × month` YoY ratios (2015 vs. 2014).
+* **Rolling Stats:** `rmean`, `rstd`, `rmax`, `rmin` for windows 7, 14, 28, 56 (anchored at lag-7).
+* **Same-DOW Averages:** `lag7_mean_4w`, `lag7_mean_8w`.
+* **Momentum:** `lag_7 / lag_28`.
+* **Calendar:** `dow`, `day_of_month`, `month`, `year`, `week_of_year`, `quarter`, `is_weekend`, `days_since_start`.
+* **Events:** `event_negative`, `event_positive`, `days_from_event`, and specific lead/lag event windows.
+* **Cross-Store Features:** Correlated store pairs used as exogenous signals.
+* **Categorical Features:** `store_id`, `event`, `store_weekend`, `store_dow`.
 
-**Model:**
+#### 2. Model Configuration
 
-- LightGBM with `n_estimators=8000`, `learning_rate=0.02`, `num_leaves=255`
-- Early stopping at 150 rounds → found best iteration at 560
-- Retrained on full 16,500 rows at exactly 560 iterations (model)
+* **Architecture:** LightGBM with `n_estimators=8000`, `learning_rate=0.02`, `num_leaves=255`.
+* **Training Strategy:** Early stopping triggered at 150 rounds on a 920-row validation holdout (found the optimal iteration to be **560**). The model was then strictly retrained on the *full* 16,500 rows for exactly 560 iterations.
 
-**Forecast**
+#### 3. Inference & Forecasting
 
-- Recursive day-to-day forecast for Oct-Dec 2015
-- Each day's prediction fed back into history buffer for next day's lags
-- Christmas explicitly zeroed out
-- Store 0 (aggregate) computed as a sume 1-10
+* **Recursive Day-to-Day:** Forecasts the Oct–Dec 2015 window iteratively. Each day's prediction is written back into the history buffer to generate dynamic lag features for the next day.
+* **Business Overrides:** Christmas explicitly zeroed out.
+* **Hierarchy:** Store 0 (Aggregate) is computed purely as a bottom-up sum of Stores 1–10.
 
-### Less Optimal Solutions
+### The "Top 3" Additions
 
-| Approach| Score | Why  |
-|------|---------|-------|
-|Prophet Only | ~9000 | No Lag Signal|
-|Recursive Stacking Ensemble | ~8000 | Error Accumulation |
-|Hierarchical reconciliation | ~6100 | Aggregate Model underestimated |
-|Phase 8 Prophet + LightGBM | ~ 9600 | Forecast Period had no Features |
-| Raw `forecast_2` without YoY | ~5700 | Missing Year-over-Year Signal| 
+Implementing these three specific features took the model from a baseline score of ~5700 down to **4733**:
 
-### Three Additions taking the model ~5700 $\rightarrow$ 4733
-
-1. Added `lag_364` and `lag_371` 
-2. Added YoY scaling `lag_364_scaled` = `lag_364` × `store_yoy_monthly, to account for growth
-3. Retrained on full dataset, at the best iteration found by early stopping.
+1. Adding deep annual lags (`lag_364` and `lag_371`).
+2. Adding YoY scaling (`lag_364_scaled`) to capture growth velocities instead of just static volumes.
+3. Retraining on the *entire* dataset at the exact optimal iteration found via early stopping.
 
 ---
----
 
-## How to replicate result:
-Run on terminal: `pip install lightgbm pandas numpy scikit-learn`
+## Experimental & Less Optimal Approaches
 
-1. Build the first feature dataset 
-Run from the project root: `python eda_generation/phase2_build_dataset.py`
-Output: `eda_generation/master_dataset_phase2.csv`
+During development, several architectures were tested and ultimately discarded:
 
-2. Run the forecasting model 
-`cd models`
-`python forecast_2.py`
-
-This will (in order):
-- Loads `data/train.csv` and `data/calendar_events.csv`
-- Builds all features including lags, rolling stats, YoY scaling, cross-store features
-- Trains LightGBM with early stopping on a 920-row validation holdout
-- Records best iteration (560)
-- Retrains `model` on all 16,500 rows at exactly 560 iterations
-- Forecasts Oct-Dec 2015 day by day using `model`
-- Saves `submission_2.csv` to the `predictions/` folder
-
-Output: predictions/submission_2.csv
-
+| Approach | Score | Why it Underperformed |
+| --- | --- | --- |
+| Prophet Only | ~9000 | Native Prophet lacked auto-regressive lag signals. |
+| Phase 8 Prophet + LightGBM | ~9600 | Forecast period had no underlying features to support the meta-learner. |
+| Recursive Stacking Ensemble | ~8000 | Severe error accumulation during the recursive loop. |
+| Hierarchical Reconciliation | ~6100 | The top-level aggregate model consistently underestimated totals. |
+| Raw `forecast_2` (No YoY) | ~5700 | Missing crucial Year-over-Year growth signals. |
 
 ---
+
+## Model Evolution: Overcoming Baseline Flaws
+
+### Why the Initial Baseline Underperformed
+
+The original baseline model produced poor forecasting results due to three fundamental flaws:
+
+1. **Train/Inference Mismatch (The Biggest Flaw):** The model was trained on real, dynamic lag values but was fed a static "recent average" for future lags during inference. *Example:* When predicting Day 8, the baseline used a flat historical average for `lag_7` instead of the model's actual Day 1 prediction.
+2. **Feature Poverty:** * *Missing Volatility:* Completely omitted rolling statistics (means, maxes, standard deviations).
+* *Shallow Seasonality:* Missed critical deeper signals like 4-week same-day averages.
+* *Naive Event Handling:* Only flagged if an event happened *today*, missing pre-event surges and post-event drop-offs.
+* *Ignored Calendar Effects:* Failed to account for realistic retail cycles like month-end paycheck effects.
+
+
+3. **Suboptimal Tuning:** The setup was undertrained (1,000 trees), lacked regularization, and evaluated against a noisy, short 30-day window.
+
+### EDA Insights Driving Version Upgrades
+
+* **The "All Stores" Skew:** The aggregate store (`store_id: 0`) generated revenue so high it distorted gradient learning. (Fix: Handled separately via bottom-up summation).
+* **Weekend Surge:** Clear weekend spending spikes ($286k vs $206k weekday averages) required explicit `is_weekend` and `store_weekend` mapping.
+* **Event Polarity:** Specific events cause outlier spikes (pre-Christmas shopping), while others cause outlier troughs (store closures on Eid al-Fitr/Christmas).
+
+### Version 2 vs. Version 3: Structural Upgrades
+
+Moving from Model v2 to v3 refined our approach significantly, dropping validation RMSE from **2533.28** to **2491.53**.
+
+* **Trend Modeling:** Replaced a basic global linear trend (`days_since_start`) with **Store-Level YoY Growth Ratios**.
+* **Cyclical Encoding:** Added Sine/Cosine transformations for time fields (`dow_sin`, `month_cos`, etc.) to remove abrupt boundary discontinuities (e.g., Dec 31st to Jan 1st).
+* **Momentum Ratios:** Added scale-independent metrics (`momentum_7_28`, etc.) to capture velocity.
+* **Calendar Context:** Hard-coded granular event lifts based on EDA, including injecting a localized `PreIndependenceDay` holiday on July 3rd (+50% sales surge).
+* **Pipeline Robustness:** Replaced index-based transforms that caused `KeyError` crashes with a clean, native `.shift()` loop, and added hard overrides for predictable closures.
+
 ---
 
-## Predicting on the 80% Final Test
+## How to Replicate the Results
 
-The model forecasts any future date range by:
-1. Using real historical revenue values for lag features on the first days
-2. Using its own predictions as lag features for subsequent days
-3. This works for any horizon 92 days (Kaggle) or longer
+**1. Install Dependencies**
 
-**If the final test preiod is different from Oct-Dec 2015**
+```bash
+pip install lightgbm pandas numpy scikit-learn
 
-In `forecast_2.py` locate the following line:
+```
 
-`all_dates = pd.date_range(forecast_start, forecast_end, freq='D')`
+**2. Build the Feature Dataset**
+Run this from the project root to generate the master dataset:
 
-where, `forecast_start` and `forecast_end` originate from the submission template:
+```bash
+python eda_generation/phase2_build_dataset.py
 
-`sub['date'] = pd.to_datetime(sub['id'].apply(lambda x: x.split('_')[1]), format='%Y%m%d')`
+```
 
-So as long as you swap in the correct submission template for the final test, `forecast_2.py` automatically forecasts the right period. 
-No code changes needed, just replace `data/forecast_submission.csv `with the final test submission template.
+*(Output: `eda_generation/master_dataset_phase2.csv`)*
+
+**3. Run the Forecasting Model**
+Navigate to the models directory and execute the pipeline:
+
+```bash
+cd models
+python forecast_2.py
+
+```
+
+**Execution Flow:**
+
+1. Loads `train.csv` and `calendar_events.csv`.
+2. Builds all features (lags, rolling stats, YoY scaling, cross-store).
+3. Trains LightGBM with early stopping to find the optimal iteration (560).
+4. Retrains the model on all 16,500 rows at exactly 560 iterations.
+5. Recursively forecasts Oct–Dec 2015 day-by-day.
+6. Exports `submission_2.csv` to the `predictions/` folder.
+
+---
+
+## Predicting on the 80% Final Test Set
+
+Our recursive model is dynamically designed to handle any future date range (e.g., the 92-day Kaggle horizon). It works by using real historical revenue values for the initial lag features, and then seamlessly transitioning to using its own predictions as lag features for subsequent days.
+
+**To predict for a new test period:**
+In `forecast_2.py`, the date range is dynamically extracted from the submission template:
+
+```python
+sub['date'] = pd.to_datetime(sub['id'].apply(lambda x: x.split('_')[1]), format='%Y%m%d')
+all_dates = pd.date_range(forecast_start, forecast_end, freq='D')
+
+```
+
+**No code changes are needed.** Simply replace `data/forecast_submission.csv` with your final test submission template, run `forecast_2.py`, and the script will automatically adjust the forecast horizon to match the target dates.
