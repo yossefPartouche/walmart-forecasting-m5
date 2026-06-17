@@ -1,0 +1,262 @@
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+
+import lightgbm as lgb
+import shap as Shap
+import numpy as np
+import pandas as pd
+from validation_framework import *
+
+df = pd.read_csv(os.path.join(os.path.dirname(__file__), '..', 'eda_generation', 'master_dataset_phase2.csv'))
+df['date'] = pd.to_datetime(df['date'])
+df['store_id'] = df['store_id'].astype('category').cat.codes
+df['state'] = df['state'].astype('category').cat.codes
+df['store_x_event'] = df['store_id'] * df['is_event']
+df['state_x_event'] = df['state'] * df['is_event']
+
+LAG_FEATURES = [
+    "lag_1",
+    "lag_7",
+    "lag_14",
+    "lag_28",
+    "lag_90",
+]
+
+ROLLING_FEATURES = [
+    "rolling_mean_7",
+    "rolling_mean_28",
+    "rolling_mean_90",
+    "rolling_std_7",
+    "rolling_std_28",
+]
+
+CALENDAR_FEATURES = [
+    "day_of_week",
+    "month",
+]
+
+STORE_FEATURES = [
+    "store_id",
+    "state",
+]
+
+### PHASE 5 START ADDITION ## 
+
+STATE_LEVEL_FEATURES = ["state_revenue_lag_7",
+                        "state_revenue_lag_28",
+                        "state_rolling_mean_7",
+                        "state_rolling_mean_28",
+                        "state_mean_revenue"]
+
+GLOBAL_LEVEL_FEATURES = [
+    "global_revenue_lag_7",
+    "global_revenue_lag_28",
+    "global_rolling_mean_7",
+    "global_rolling_mean_28",
+]
+
+RELATIVE_FEATURES = [
+    "store_mean_revenue",
+    "store_to_state_ratio",
+    "store_to_global_ratio",
+]
+
+## PHASE 5 END ADDITON ##
+
+## PHASE 6 START ADDITON ##
+
+EVENT_FEATURES = [
+    "is_event",
+    "days_before_event",
+    "days_after_event",
+    "event_type_sports",
+    "event_type_federal_holiday",
+    "event_type_christian",
+    "event_type_cultural",
+    "event_type_jewish",
+    "event_type_islamic",
+    "event_type_other",
+    "store_x_event",
+    "state_x_event",
+]
+
+## PHASE 6 END ADDITION ## 
+
+BASELINE_FEATURES = (
+    LAG_FEATURES
+    + ROLLING_FEATURES
+    + CALENDAR_FEATURES
+    + STORE_FEATURES 
+    # PHASE 5 ADDDITION
+    + STATE_LEVEL_FEATURES + GLOBAL_LEVEL_FEATURES + RELATIVE_FEATURES
+    # PHASE 5 EN
+    # PHASE 6 ADDDITION
+    + EVENT_FEATURES
+    # PHASE 6 END
+)
+
+TARGET = "revenue"
+
+# =============================================================================
+# MODEL
+# =============================================================================
+
+MODEL_PARAMS = {
+    "objective": "regression",
+    "metric": "rmse",
+    "learning_rate": 0.03,
+    "n_estimators": 1000,
+    "num_leaves": 64,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "random_state": 42,
+}
+
+def train_baseline_model(train_df, features):
+
+    model = lgb.LGBMRegressor(**MODEL_PARAMS)
+
+    model.fit(
+        train_df[features],
+        train_df[TARGET],
+    )
+
+    return model
+
+def evaluate_baseline_split(
+    model,
+    valid_df,
+    features,
+    target="revenue",
+):
+
+    preds = model.predict(
+        valid_df[features]
+    )
+
+    metrics = compute_metrics(
+        valid_df[target].values,
+        preds,
+    )
+
+    return metrics, preds
+
+train_df, valid_df = run_validation_split(
+    df,
+    VALIDATION_SPLITS[0]
+)
+
+model = train_baseline_model(
+    train_df,
+    BASELINE_FEATURES,
+)
+
+metrics_a, preds_a = evaluate_baseline_split(
+    model,
+    valid_df,
+    BASELINE_FEATURES,
+)
+print("Split A metrics:", metrics_a)
+
+train_df, valid_df = run_validation_split(
+    df,
+    VALIDATION_SPLITS[1]
+)
+
+model = train_baseline_model(
+    train_df,
+    BASELINE_FEATURES,
+)
+
+metrics_b, preds_b = evaluate_baseline_split(
+    model,
+    valid_df,
+    BASELINE_FEATURES,
+)
+
+print("Split B metrics:", metrics_b)
+
+rolling_results = []
+
+for (
+    start,
+    end,
+    train_df,
+    valid_df,
+) in rolling_backtest_generator(df):
+
+    model = train_baseline_model(
+        train_df,
+        BASELINE_FEATURES,
+    )
+
+    metrics, _ = evaluate_baseline_split(
+        model,
+        valid_df,
+        BASELINE_FEATURES,
+    )
+
+    metrics["window_start"] = start
+    metrics["window_end"] = end
+
+    rolling_results.append(metrics)
+
+rolling_results = pd.DataFrame(
+    rolling_results
+)
+
+feature_importance = pd.DataFrame({
+    "feature": BASELINE_FEATURES,
+    "importance": model.feature_importances_,
+})
+
+feature_importance = (
+    feature_importance
+    .sort_values(
+        "importance",
+        ascending=False
+    )
+)
+
+feature_importance.to_csv(
+    "feature_importance_phase6_lightgbm.csv",
+    index=False
+)
+
+explainer = Shap.TreeExplainer(model)
+
+sample = train_df[
+    BASELINE_FEATURES
+].sample(
+    10000,
+    random_state=42
+)
+
+shap_values = explainer.shap_values(
+    sample
+)
+
+Shap.summary_plot(
+    shap_values,
+    sample,
+)
+
+shap_importance = pd.DataFrame({
+    "feature": sample.columns,
+    "mean_abs_shap":
+        np.abs(shap_values).mean(axis=0)
+})
+
+shap_importance = (
+    shap_importance
+    .sort_values(
+        "mean_abs_shap",
+        ascending=False
+    )
+)
+
+shap_importance.to_csv(
+    "shap_importance_phase6_lightgbm.csv",
+    index=False
+)

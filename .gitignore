@@ -2,3 +2,38 @@ data/
 .vscode/
 kaggle.json
 *.csv
+
+# Data files (too large / regenerable)
+eda_generation/master_dataset.csv
+eda_generation/master_dataset.parquet
+eda_generation/master_dataset_phase2.csv
+eda_generation/master_dataset_phase7.csv
+eda_generation/aggregate_forecast.csv
+eda_generation/forecast_period_prophet.csv
+
+# Models
+data/model.pkl
+models/data/
+
+# Credentials
+kaggle.json
+
+# Python
+__pycache__/
+*.pyc
+*.pkl
+*.cbm
+
+# Submissions (keep only best)
+predictions/submission_1.csv
+predictions/submission_3.csv
+predictions/submission_4.csv
+predictions/submission_5*.csv
+predictions/submission_7*.csv
+predictions/submission_phase*.csv
+predictions/submission_reconciled.csv
+predictions/submission_recursive.csv
+predictions/ensemble_submission_1.csv
+predictions/my_first_submission.csv
+predictions/submission_3_deeper.csv
+predictions/submission_2_reconciled.csv
